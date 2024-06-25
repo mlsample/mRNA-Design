@@ -1,1 +1,6 @@
-/science_melting
+/strucutres
+/pres_images
+.vscode
+*.egg-info
+
+

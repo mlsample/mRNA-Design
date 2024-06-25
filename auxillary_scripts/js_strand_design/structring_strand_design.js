@@ -41,24 +41,6 @@ function getSystemInfo() {
 // Run getSystemInfo()
 ///////////////////////////////////////////////////////////////////////////////////////////
 
-half2_badNucs = getSystemInfo()
-half2 = half2_badNucs[0]
-badNucs = half2_badNucs[1]
-
-///////////////////////////////////////////////////////////////////////////////////////////
-// At this point we now modify the 3` and 5` ends of the template by hand in oxView
-///////////////////////////////////////////////////////////////////////////////////////////
-
-// Data to modify template by hand
-unstruct_3 = 'GTGGTGGGGCCACTTGTCGAGGAGCGGGAACGAGTGGTA' // first select 3` end and extend
-utr_5 = 'ccaccgcccaagagagactcagacacccctggtcttcttatgatcaaataa' // then select 3` end and extend the 5` 
-utr_3 = 'tgagctggagcctcggtggcctagcttcttgccccttgggcctccccccagcccctcctccccttcctgcacccgtacccccgtggtctttgaataaagtctgagtgggcggc'
-poly_a = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-
-/////////////////////////////////////////////////////////////////////////
-// done with hand modification
-/////////////////////////////////////////////////////////////////////////
-
 function editSequence(half2, badNucs) {
 
   // The coding sequence of our gene in 3` to 5` that will be structred
@@ -89,6 +71,9 @@ function editSequence(half2, badNucs) {
 
 ///////////////////////
 // run this and thecn change the color of the selected bases in oxView
+half2_badNucs = getSystemInfo()
+half2 = half2_badNucs[0]
+badNucs = half2_badNucs[1]
 
 editSequence(half2, badNucs)
 
@@ -101,3 +86,19 @@ selectedBases.forEach((e) => {
 })
 
 api.toggleBaseColors()
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////
+// At this point we now modify the 3` and 5` ends of the template by hand in oxView
+///////////////////////////////////////////////////////////////////////////////////////////
+
+// // Data to modify template by hand
+// unstruct_5 = 'GTGGTGGGGCCACTTGTCGAGGAGCGGGAACGAGTGGTA' // first select 5` end and extend
+// utr_5 = 'ccaccgcccaagagagactcagacacccctggtcttcttatgatcaaataa' // then select 3` end and extend the 5` 
+// utr_3 = 'tgagctggagcctcggtggcctagcttcttgccccttgggcctccccccagcccctcctccccttcctgcacccgtacccccgtggtctttgaataaagtctgagtgggcggc'
+// poly_a = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+/////////////////////////////////////////////////////////////////////////
+// done with hand modification
+/////////////////////////////////////////////////////////////////////////
