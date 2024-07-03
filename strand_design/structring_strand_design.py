@@ -3,30 +3,54 @@ import ipy_oxdna.dna_structure as dna
 from oxDNA_analysis_tools.output_bonds import output_bonds
 from oxDNA_analysis_tools.UTILS.RyeReader import get_confs, inbox, describe
 from oxDNA_analysis_tools.UTILS.oxview import oxdna_conf
+import os
+import multiprocessing as mp
 import numpy as np
 import argparse
 import subprocess
 from pathlib import Path
 import sys
 import pandas as pd
+from copy import deepcopy
+from tqdm.auto import tqdm
+import json
+
 
 def main():
-    strucutre_file, topology_file, input_md_file, coding_sequence, output_name = collect_args()
+    strucutre_file, topology_file, input_md_file, coding_sequence, output_name, traj_file, five_prime, three_prime = collect_args()
 
     coding_seq_str = parse_coding_sequence(coding_sequence)
 
     strucutre = get_structure(strucutre_file, topology_file)
+    n_bases = len(strucutre.strands[0])
 
-    hb_id_1, hb_id_2 = get_hblist(strucutre_file, topology_file, input_md_file)
+    hb_id_1, hb_id_2 = get_hblist(strucutre_file, topology_file, input_md_file, traj_file, n_bases)
     
     half, indexes_1, indexes_2 = get_halfs(strucutre)
     
     pair_map = make_pair_map(hb_id_1, hb_id_2)
-    index_to_seq_map = get_index_to_seq_map(strucutre)
     
-    coding_indexes, coding_complement = get_idx_of_coding_complement(indexes_1, indexes_2, pair_map, coding_seq_str)
+    coding_indexes, coding_with_complement, coding_complement, coding_no_complement = get_idx_of_coding_complement(indexes_1, indexes_2, pair_map, coding_seq_str)
     
     coding_binds_coding_indexes = find_where_coding_binds_coding(coding_indexes, coding_complement, pair_map)
+    
+    mutated_struct = mutate_coding(strucutre, coding_indexes, coding_seq_str)
+    
+    index_to_seq_map_with_coding = get_index_to_seq_map(mutated_struct)
+    
+    mutate_noncoding(mutated_struct, index_to_seq_map_with_coding, coding_with_complement,
+                     coding_complement, coding_no_complement, pair_map,
+                     coding_binds_coding_indexes, coding_indexes)
+    
+    stats = validate_mutation(mutated_struct, index_to_seq_map_with_coding, coding_with_complement,
+                      coding_complement, coding_no_complement, pair_map,
+                      coding_binds_coding_indexes, coding_seq_str, coding_indexes, strucutre)
+    
+    add_5_prime(five_prime, mutated_struct)
+    
+    add_3_prime(three_prime, mutated_struct)
+    
+    export_structure(mutated_struct, output_name, stats)
     
     return 0
 
@@ -40,14 +64,21 @@ def parse_arguments():
     parser.add_argument('-i', '--input_md_file', metavar='input_md_file', type=str,
                         help='Path to oxDNA input file EX: ./input')
     parser.add_argument('-c', '--coding_sequence', metavar='output_name', type=str,
-                        help='Path to .txt or .fasta file coding sequence EX: ./coding_seq.txt')
+                        help='Path to .txt or .fasta file coding sequence with bases in 5` to 3` order EX: ./coding_seq.txt')
     parser.add_argument('-o', '--output_name', metavar='output_name', type=str,
                         help='name of the Default: ./fatcat_tmalign_homology_search.csv')
+    parser.add_argument('--traj_file', metavar='traj_file', type=str,
+                        help='Path to oxDNA .dat trajectory file of for determining hb pairs')
+    parser.add_argument('--five_prime', metavar='five_prime', type=str,
+                        help='Path to a .txt or .fasta file with bases in 5` to 3` order to add to 5 prime end')
+    parser.add_argument('--three_prime', metavar='three_prime', type=str,
+                        help='Path to a .txt or .fasta file with bases with bases in 5` to 3` order to add to 3 prime end')
     parser.add_argument('--force_overwrite', action='store_true',
                         help='Force overwrite of existing results if they exist.')
 
     args = parser.parse_args()
     return args, parser
+
 
 def collect_args():
     """
@@ -106,15 +137,37 @@ def collect_args():
                 assert len(lines) == 1, "txt file must have 1 line"
 
     if not args.output_name:
-        output_name = 'coding_sequence_embbeded_strucutre'
+        output_name = Path('coding_sequence_embbeded_strucutre')
     else:
-        output_name = args.output_name
-
+        output_name = Path(args.output_name)
+        
+    
+    if not args.traj_file:
+        traj_file = None
+    else:
+        traj_file = Path(args.traj_file)
+        if not traj_file.exists():
+            raise ValueError('Trajectory file does not exist')
+        
+    if not args.five_prime:
+        five_prime = None
+    else:
+        five_prime = Path(args.five_prime)
+        if not five_prime.exists():
+            raise ValueError('Five prime file does not exist')
+    
+    if not args.three_prime:
+        three_prime = None
+    else:
+        three_prime = Path(args.three_prime)
+        if not three_prime.exists():
+            raise ValueError('Three prime file does not exist')
+    
     if not args.force_overwrite:
         if (Path(f'{output_name}.dat').exists()) or (Path(f'{output_name}.top').exists()):
             raise ValueError(f'Output file {output_name} already exists.\
                 Please use the --force_overwrite flag to overwrite the file.')
-    return strucutre_file, topology_file, input_md_file, coding_sequence, output_name
+    return strucutre_file, topology_file, input_md_file, coding_sequence, output_name, traj_file, five_prime, three_prime
 
 
 def parse_coding_sequence(coding_sequence):
@@ -124,7 +177,7 @@ def parse_coding_sequence(coding_sequence):
             coding_seq_str = lines[1]
     elif coding_sequence.suffix == '.txt':
         with open(coding_sequence, 'r') as f:
-            coding_seq_str = f.readline()[0]
+            coding_seq_str = f.readline()
 
     unique_bases = set(coding_seq_str)
     possible_bases = set('ATCGUatcgu')
@@ -139,33 +192,60 @@ def get_structure(strucutre_file, topology_file):
     return strucutre
 
 
-def get_hblist(strucutre_file, topology_file, input_md_file):
+def run_output_bonds(input_md_file, strucutre_file):
+    p1 = f'oat output_bonds "{input_md_file.as_posix()}" "{strucutre_file.as_posix()}" '
 
-    inline_code =  f"""
-from oxDNA_analysis_tools.output_bonds import output_bonds
-from oxDNA_analysis_tools.UTILS.RyeReader import describe
-top_info, traj_info = describe("{topology_file.as_posix()}", "{strucutre_file.as_posix()}")
-output_bonds(traj_info, top_info, "{input_md_file.as_posix()}")
-    """
+    p2 = """| grep -v "#" | gawk '{if($7 < -0.1){print $1 " " $2 " " $7 " "}}' > hblist.txt"""
 
-    result = subprocess.run([sys.executable, '-c', inline_code], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True)
-
-    stdout_output = result.stdout
-
-    potential_information = [info for info in stdout_output.split('\n') if "#" not in info]
-    parsed_potentials = [info.strip().split(' ') for info in potential_information]
-    parsed_potentials = np.array([info for info in parsed_potentials if len(info) == 11], dtype=float)
-
-    headers = stdout_output.split('\n')[0].split(' ')
-    potential_names = headers[:-3]
-    potential_names[0] = potential_names[0][1:]
-    potential_names[-1] = potential_names[-1][:-1]
+    invovation = p1 + p2
+    start_dir = os.getcwd()
+    os.chdir(input_md_file.parent)
+    result = subprocess.run(invovation, shell=True)
+    os.chdir(start_dir)
     
-    df = pd.DataFrame(parsed_potentials, columns=potential_names)
-    hb_series = df[df['HB'] < -0.1]
-    hb_id_1 = hb_series['id1']
-    hb_id_2 = hb_series['id2']
-    
+    return None
+
+def get_hblist(strucutre_file, topology_file, input_md_file, traj_file, n_bases):
+    if traj_file is not None:
+        strucutre_file = traj_file
+
+    # run_output_bonds(input_md_file, strucutre_file)
+    with open('hblist.txt', 'r') as f:
+        lines = f.readlines()
+    lines_strip = [line.strip() for line in lines]
+    lines_split = [line.split(' ') for line in lines_strip]
+    lines_array = []
+    for line in lines_split:
+        try:
+            lines_array.append(np.array(line, dtype=float))
+        except:
+            print(line)
+    lines_one_array = np.array(lines_array)
+    columns = ['id1', 'id2', 'HB']
+    df = pd.DataFrame(lines_one_array, columns=columns, dtype=float)
+    df_result = df.groupby(['id1', 'id2']).mean().reset_index()
+    unq_counts_1 = np.unique(df_result['id1'], return_counts=True)
+    unq_counts_2 = np.unique(df_result['id2'], return_counts=True)
+    idx_1 = np.where(unq_counts_1[1] > 1)
+    idx_2 = np.where(unq_counts_2[1] > 1)
+    failed_1 = unq_counts_1[0][np.where(unq_counts_1[1] > 1)] 
+    failed_2 = unq_counts_2[0][np.where(unq_counts_2[1] > 1)] 
+
+    indexes_to_drop = []
+    for fail in failed_1:
+        rows_to_look_at = df_result[df_result['id1'] == fail]
+        indexes_to_drop.append(rows_to_look_at[rows_to_look_at['HB'] != rows_to_look_at['HB'].min()].index)
+    for fail in failed_2:
+        rows_to_look_at = df_result[df_result['id2'] == fail]
+        indexes_to_drop.append(rows_to_look_at[rows_to_look_at['HB'] != rows_to_look_at['HB'].min()].index)
+         
+    index_pd = np.unique(indexes_to_drop)
+    df_result = df_result.drop(index=index_pd)
+    df_result = df_result.reset_index(drop=True)
+        
+    hb_id_1 = df_result['id1'].reset_index(drop=True).map(int)
+    hb_id_2 = df_result['id2'].reset_index(drop=True).map(int)
+
     return hb_id_1, hb_id_2
 
 
@@ -173,8 +253,8 @@ def get_halfs(strucutre):
     n_bases = strucutre.get_num_bases()
     half = int(np.floor(n_bases/2))
     
-    indexes_1 = np.arange(half)
-    indexes_2 = np.arange(half, n_bases)
+    indexes_1 = np.array(np.arange(half), dtype=int)
+    indexes_2 = np.array(np.arange(half, n_bases), dtype=int)
 
     return half, indexes_1, indexes_2
 
@@ -191,10 +271,16 @@ def get_idx_of_coding_complement(indexes_1, indexes_2, pair_map, coding_seq_str)
     assert len(coding_seq_str) <= len(indexes_1), "coding sequence is longer than half of the structure"
     
     second_half_reversed = indexes_2[::-1]
-    coding_indexes = second_half_reversed[:len(coding_seq_str)]
-    coding_complement = [pair_map[i] for i in coding_indexes]
     
-    return coding_indexes, coding_complement
+    coding_complement = []
+    coding_indexes = second_half_reversed[:len(coding_seq_str)]
+    
+    coding_with_complement = [i for i in coding_indexes if int(i) in pair_map]
+    coding_complement = [pair_map[int(i)] for i in coding_indexes if int(i) in pair_map]
+    
+    coding_no_complement = [i for i in coding_indexes if int(i) not in pair_map]
+    
+    return coding_indexes, coding_with_complement, coding_complement, coding_no_complement
 
 
 def find_where_coding_binds_coding(coding_indexes, coding_complement, pair_map):
@@ -213,20 +299,153 @@ def get_index_to_seq_map(strucutre):
     return index_to_seq_map
 
 
-def mutate_strucutre():
-    pass
+def mutate_coding(strucutre, coding_indexes, coding_seq_str):
+    mutated_struct = deepcopy(strucutre)
+    mutated_struct.strands[0].mutate_sequence(coding_seq_str, min(coding_indexes), max(coding_indexes)+1) 
+    coding_str_U_to_T =  ''.join([base if base != 'U' else 'T' for base in coding_seq_str])
+    struct_bases = ''.join(mutated_struct.strands[0].bases[coding_indexes].tolist())
+    assert coding_str_U_to_T == struct_bases
+    return mutated_struct
 
 
-def mutate_coding():
-    pass
+def mutate_noncoding(mutated_struct, index_to_seq_map_with_coding, coding_with_complement, coding_complement, coding_no_complement, pair_map, coding_binds_coding_indexes, coding_indexes):
+    # After I mutated the coding, I now want to mutate non-coding that is complement to the coding, but which is not itself coding
+    i = 0
+    j = 0
+    coding_binds_coding = np.unique(list(map(int, [vals for tpl in coding_binds_coding_indexes for vals in tpl])))
+    for code_w_comp, code_comp in zip(coding_with_complement, coding_complement):
+        if (code_w_comp not in coding_binds_coding) and (code_comp not in coding_binds_coding):
+            j += 1
+            assert code_comp not in coding_indexes
+            assert code_w_comp not in coding_no_complement
+            assert pair_map[code_w_comp] == code_comp, 'Logic error'
+            coding_base = index_to_seq_map_with_coding[code_w_comp]
+            assert mutated_struct.strands[0].bases[code_w_comp] == coding_base
+            new_base = get_compseq(coding_base)
+            mutated_struct.strands[0].mutate_sequence(new_base, code_comp)
+        else:
+            i += 1
+    
+    return None
 
 
-def mutate_noncoding():
-    pass
+def validate_mutation(mutated_struct, index_to_seq_map_with_coding, coding_with_complement, coding_complement, coding_no_complement, pair_map, coding_binds_coding_indexes, coding_seq_str, coding_indexes, strucutre):
+    mutated_struct_bak = deepcopy(mutated_struct)
+    strucutre_bak = deepcopy(strucutre)
+    
+    struct_bases = mutated_struct_bak.strands[0].bases
+    
+    min_coding_idx = min(coding_indexes)
+    max_coding_idx = max(coding_indexes)
+    coding_slice = slice(min_coding_idx, max_coding_idx +1)
+    
+    struct_coding_bases = struct_bases[coding_slice]
+    
+    struct_obj_coding_bases = mutated_struct_bak.strands[0][coding_slice]
+
+    real_coding_5_to_3 = ''.join([base if base != 'U' else 'T' for base in coding_seq_str])
+    real_coding_3_to_5 = ''.join([seq if seq != 'U' else 'T' for seq in coding_seq_str][::-1])
+    struct_bases_str_5_3 = ''.join(struct_coding_bases.tolist()[::-1])
+    struct_bases_str_3_5 = ''.join(struct_coding_bases.tolist())
+    
+    assert real_coding_5_to_3 == struct_bases_str_5_3
+    assert real_coding_3_to_5 == struct_bases_str_3_5
+    
+    coding_with_complement_bases = [mutated_struct_bak.strands[0][int(code_w_comp)] for code_w_comp in coding_with_complement]
+    coding_w_comp_complements = [pair_map[int(code_w_comp)] for code_w_comp in coding_with_complement]
+    coding_w_comp_complements_bases = [mutated_struct_bak.strands[0][int(comps)] for comps in coding_w_comp_complements]
+    
+    c_w_c_b_str = ''.join([base_obj.base for base_obj in coding_with_complement_bases])
+    c_w_c_c_b_str = ''.join([base_obj.base for base_obj in coding_w_comp_complements_bases])
+    
+    c_w_c_c_b_str_comp = ''.join([get_compseq(base) for base in c_w_c_c_b_str])
+    
+    assert c_w_c_b_str != c_w_c_c_b_str_comp
+    
+    all_bad_idxes = [idx for tpl in coding_binds_coding_indexes for idx in tpl]
+    
+    coding_with_comp_not_self = [code_w_comp for code_w_comp in coding_with_complement if code_w_comp not in all_bad_idxes]
+    the_comp_idxes = [pair_map[int(c_w_c_n_s)] for c_w_c_n_s in coding_with_comp_not_self]
+    
+    coding_with_comp_not_self_bases = [mutated_struct_bak.strands[0][int(base_idx)] for base_idx in coding_with_comp_not_self]
+    the_comp_idxes_bases = [mutated_struct_bak.strands[0][int(base_idx)] for base_idx in the_comp_idxes]
+    
+    coding_with_comp_not_self_bases_str = ''.join([base_obj.base for base_obj in coding_with_comp_not_self_bases])
+    the_comp_idxes_bases_str = ''.join([base_obj.base for base_obj in the_comp_idxes_bases])
+    the_comp_idxes_bases_str_comp = ''.join([get_compseq(base) for base in the_comp_idxes_bases_str])
+    
+    assert coding_with_comp_not_self_bases_str == the_comp_idxes_bases_str_comp
+    
+    for key,value in pair_map.items():
+        if (key not in all_bad_idxes) and (value not in all_bad_idxes):
+            key_base = strucutre_bak.strands[0][int(key)].base
+            value_base = strucutre_bak.strands[0][int(value)].base
+            comp_value_base = get_compseq(value_base)
+            assert comp_value_base == key_base, f'{key}, {value} failed'
+        
+    base_idx_set = set(range(len(mutated_struct_bak.strands[0])))
+    paired_idx_set = set(pair_map.keys())
+    unpaired_nucs = base_idx_set.difference(paired_idx_set)
+    unpaired_in_coding = set(coding_indexes).intersection(unpaired_nucs)
+    unpaired_in_coding_list = sorted(list(unpaired_in_coding))
+    unpaired_in_strucutring = unpaired_nucs.difference(unpaired_in_coding)
+    unpaired_in_strucutring_list = sorted(list(unpaired_in_strucutring))
+    
+    all_coding = set(map(int, coding_indexes))
+    coding_no_comp = set(map(int, coding_no_complement))
+    coding_self_binding = set(map(int, all_bad_idxes))
+    coding_bound = all_coding.difference(coding_no_comp).difference(coding_self_binding)
+    
+    all_structring = base_idx_set.difference(all_coding)
+    structring_no_comp = all_structring.difference(paired_idx_set)
+    structring_bound_to_coding = set([pair_map[int(bound_coding)] for bound_coding in list(coding_bound)])
+    structring_unbound = all_structring.difference(structring_bound_to_coding)
+    
+    assert len(set(coding_indexes).intersection(unpaired_nucs).difference(set(coding_no_complement))) == 0
+    
+    return coding_no_comp, coding_self_binding, coding_bound, structring_no_comp, structring_bound_to_coding, structring_unbound
 
 
-def mutate_leftover_non_mutated_coding():
-    pass
+def add_5_prime(five_prime, mutated_strcutre):
+    if five_prime is not None:
+        current_five_prime_base = mutated_strcutre.strands[0][-1]
+
+        bases_to_add = parse_coding_sequence(five_prime)
+        bases_to_add = ''.join([base if base != 'U' else 'T' for base in bases_to_add][::-1])
+        fwd_strand, reverse_strand = dna.construct_strands(bases_to_add, current_five_prime_base.pos - 2, current_five_prime_base.a3)
+
+        mutated_strcutre.strands[0].append(fwd_strand)
+    return None
+
+def add_3_prime(three_prime, mutated_strcutre):
+    if three_prime is not None:
+        current_three_prime_base = mutated_strcutre.strands[0][0]
+
+        bases_to_add = parse_coding_sequence(three_prime)
+        bases_to_add = ''.join([base if base != 'U' else 'T' for base in bases_to_add][::-1])
+        fwd_strand, reverse_strand = dna.construct_strands(bases_to_add, current_three_prime_base.pos - 4, current_three_prime_base.a3, rot=90)
+
+        mutated_strcutre.strands[0].prepend(fwd_strand)
+    return None
+
+
+def export_structure(mutated_strcutre, output_name, stats):
+    top_file_path = output_name.with_suffix('.top') 
+    dat_file_path = output_name.with_suffix('.dat')
+    mutated_strcutre.export_top_conf(top_file_path, dat_file_path)
+    
+    coding_no_comp, coding_self_binding, coding_bound, structring_no_comp, structring_bound_to_coding, structring_unbound = stats
+
+    mutated_strcutre.export_oxview(output_name.with_suffix('.oxview'))
+    with open(output_name.with_suffix('.oxview'), 'r') as f:
+        oxview_file = json.load(f)
+        
+    return None
+
+
+def get_compseq(seq):
+    complement_translation = str.maketrans('ACGT', 'TGCA')
+    return seq.translate(complement_translation)[::-1]
 
 
 if __name__ == '__main__':
