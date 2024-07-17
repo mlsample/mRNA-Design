@@ -1,6 +1,8 @@
 /strucutres
 /pres_images
+/origami_deltag
+/auxillary_scripts
 .vscode
 *.egg-info
-
+*.pyc
 

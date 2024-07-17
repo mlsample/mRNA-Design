@@ -1,8 +1,9 @@
 import pytest
-import strand_design. structring_strand_design as ssd
+import strand_design.structring_strand_design as ssd
 from pathlib import Path
 import shutil
 import os
+import numpy as np
 import ipy_oxdna.dna_structure as dna
 
 class TestStructringStrandDesign:
@@ -28,17 +29,6 @@ class TestStructringStrandDesign:
         ex_sequence_dependant_parameters = Path('./strucutres/science_melting/nanobase_files/rna_sequence_dependent_parameters.txt')
         shutil.copy2(ex_sequence_dependant_parameters, file_dir)
         
-        # with open(f'{file_dir}/inputMD', 'r') as f:
-        #     lines = f.readlines()
-        
-        # new_line = f'seq_dep_file = {file_dir}/rna_sequence_dependent_parameters.txt\n'    
-        # with open(f'{file_dir}/inputMD', 'w') as f:
-        #     for line in lines:
-        #         if "seq_dep_file = rna_sequence_dependent_parameters.txt" in line:
-        #             f.write(new_line)
-        #         else:
-        #             f.write(line)
-
         return file_dir
 
 
@@ -143,7 +133,7 @@ class TestStructringStrandDesign:
     def test_parse_coding_sequence_txt(self, dir_all_files, monkeypatch):
         test_args = self.set_args(dir_all_files)
         monkeypatch.setattr('sys.argv',test_args)
-        strucutre_file, topology_file, input_md_file, coding_sequence, output_name = ssd.collect_args()
+        strucutre_file, topology_file, input_md_file, coding_sequence, output_name, traj_file = ssd.collect_args()
         assert coding_sequence.suffix == '.txt'
         
         coding_seq_str = ssd.parse_coding_sequence(coding_sequence)
@@ -156,7 +146,7 @@ class TestStructringStrandDesign:
         test_args = self.set_args(dir_fasta_coding_seq)
         test_args = [arg if 'coding_seq.txt' not in arg else f'{dir_fasta_coding_seq}/coding_seq.fasta' for arg in test_args]
         monkeypatch.setattr('sys.argv',test_args)
-        strucutre_file, topology_file, input_md_file, coding_sequence, output_name = ssd.collect_args()
+        strucutre_file, topology_file, input_md_file, coding_sequence, output_name, traj_file = ssd.collect_args()
         assert coding_sequence.suffix == '.fasta'
         
         coding_seq_str = ssd.parse_coding_sequence(coding_sequence)
@@ -168,7 +158,7 @@ class TestStructringStrandDesign:
     def test_get_strucutre(self, dir_all_files, monkeypatch):
         test_args = self.set_args(dir_all_files)
         monkeypatch.setattr('sys.argv',test_args)
-        strucutre_file, topology_file, input_md_file, coding_sequence, output_name = ssd.collect_args()
+        strucutre_file, topology_file, input_md_file, coding_sequence, output_name, traj_file = ssd.collect_args()
         
         strucutre = ssd.get_structure(strucutre_file, topology_file)
         assert isinstance(strucutre, dna.DNAStructure)
@@ -177,18 +167,101 @@ class TestStructringStrandDesign:
     def test_get_hb_list(self, dir_all_files, monkeypatch):
         test_args = self.set_args(dir_all_files)
         monkeypatch.setattr('sys.argv',test_args)
-        strucutre_file, topology_file, input_md_file, coding_sequence, output_name = ssd.collect_args()
+        strucutre_file, topology_file, input_md_file, coding_sequence, output_name, traj_file = ssd.collect_args()
         cwd = os.getcwd()
         os.chdir(dir_all_files)
-        hb_id_1, hb_id_2 = ssd.get_hblist(strucutre_file, topology_file, input_md_file)
+        hb_id_1, hb_id_2 = ssd.get_hblist(strucutre_file, topology_file, input_md_file, traj_file)
         os.chdir(cwd)
         assert len(hb_id_1) == len(hb_id_2)
         
         # I want to be able to make sure that no id in hb_id_1 is in hb_id_2
         assert len(set(hb_id_1).intersection(set(hb_id_2))) == 0
+
+
+    def test_get_halfs(self, dir_all_files, monkeypatch):
+        test_args = self.set_args(dir_all_files)
+        monkeypatch.setattr('sys.argv',test_args)
+        strucutre_file, topology_file, input_md_file, coding_sequence, output_name, traj_file = ssd.collect_args()
+        cwd = os.getcwd()
+        
+        strucutre = ssd.get_structure(strucutre_file, topology_file)
+        half, indexes_1, indexes_2 = ssd.get_halfs(strucutre)
+        
+        assert set(indexes_1).difference(set(indexes_2)) == set(indexes_1)
+
+
+    def test_make_pair_map(self, dir_all_files, monkeypatch):
+        test_args = self.set_args(dir_all_files)
+        monkeypatch.setattr('sys.argv',test_args)
+        strucutre_file, topology_file, input_md_file, coding_sequence, output_name, traj_file = ssd.collect_args()
+        cwd = os.getcwd()
+        os.chdir(dir_all_files)
+        hb_id_1, hb_id_2 = ssd.get_hblist(strucutre_file, topology_file, input_md_file, traj_file)
+        os.chdir(cwd)
+        pair_map = ssd.make_pair_map(hb_id_1, hb_id_2)
+        
+        assert np.all(np.isin(np.array(list(pair_map.keys())), np.array(list(pair_map.keys()))))
+
+
+    def test_get_idx_of_coding_complement(self, dir_all_files, monkeypatch):
+        test_args = self.set_args(dir_all_files)
+        monkeypatch.setattr('sys.argv',test_args)
         
         
-  
+        strucutre_file, topology_file, input_md_file, coding_sequence, output_name, traj_file = ssd.collect_args()
+        
+        coding_seq_str = ssd.parse_coding_sequence(coding_sequence)
+        strucutre = ssd.get_structure(strucutre_file, topology_file)
+        
+        cwd = os.getcwd()
+        os.chdir(dir_all_files)
+        hb_id_1, hb_id_2 = ssd.get_hblist(strucutre_file, topology_file, input_md_file, traj_file)
+        os.chdir(cwd)
+        
+        half, indexes_1, indexes_2 = ssd.get_halfs(strucutre)
+        pair_map = ssd.make_pair_map(hb_id_1, hb_id_2)
+        index_to_seq_map = ssd.get_index_to_seq_map(strucutre) 
+                
+        coding_indexes, coding_complement = ssd.get_idx_of_coding_complement(indexes_1, indexes_2, pair_map, coding_seq_str)       
+        
+        for code, comp in zip(coding_indexes, coding_complement):
+            code_seq = strucutre.get_base(int(code)).base
+            comp_seq = strucutre.get_base(int(comp)).base
+            
+            assert ssd.get_compseq(code_seq) == comp_seq
+            
+        assert len(coding_indexes) == len(coding_complement)
+            
+
+    def test_find_where_coding_binds_coding(self, dir_all_files, monkeypatch):
+        test_args = self.set_args(dir_all_files)
+        monkeypatch.setattr('sys.argv',test_args)
+        
+        
+        strucutre_file, topology_file, input_md_file, coding_sequence, output_name, traj_file = ssd.collect_args()
+        
+        coding_seq_str = ssd.parse_coding_sequence(coding_sequence)
+        strucutre = ssd.get_structure(strucutre_file, topology_file)
+        
+        cwd = os.getcwd()
+        os.chdir(dir_all_files)
+        hb_id_1, hb_id_2 = ssd.get_hblist(strucutre_file, topology_file, input_md_file, traj_file)
+        os.chdir(cwd)
+        
+        half, indexes_1, indexes_2 = ssd.get_halfs(strucutre)
+        pair_map = ssd.make_pair_map(hb_id_1, hb_id_2)
+        index_to_seq_map = ssd.get_index_to_seq_map(strucutre) 
+                
+        coding_indexes, coding_complement = ssd.get_idx_of_coding_complement(indexes_1, indexes_2, pair_map, coding_seq_str)       
+        
+        coding_binds_coding_indexes = ssd.find_where_coding_binds_coding(coding_indexes, coding_complement, pair_map)
+        
+        assert np.all(np.isin(coding_binds_coding_indexes, coding_indexes))
+
+
+    def test_mutate_coding()
+
+
     def test_main(self, dir_all_files, monkeypatch):
         test_args = self.set_args(dir_all_files)
         monkeypatch.setattr('sys.argv',test_args)

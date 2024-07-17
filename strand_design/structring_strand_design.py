@@ -3,17 +3,20 @@ import ipy_oxdna.dna_structure as dna
 from oxDNA_analysis_tools.output_bonds import output_bonds
 from oxDNA_analysis_tools.UTILS.RyeReader import get_confs, inbox, describe
 from oxDNA_analysis_tools.UTILS.oxview import oxdna_conf
+from folder_base import get_energy_ratio, setup_ssorigami_from_files
+
 import os
 import multiprocessing as mp
 import numpy as np
 import argparse
 import subprocess
 from pathlib import Path
-import sys
 import pandas as pd
 from copy import deepcopy
-from tqdm.auto import tqdm
 import json
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 
 
 def main():
@@ -46,11 +49,13 @@ def main():
                       coding_complement, coding_no_complement, pair_map,
                       coding_binds_coding_indexes, coding_seq_str, coding_indexes, strucutre)
     
+    ori_new_tocolor = plot_statistics(mutated_struct, pair_map, stats, mutated_struct, topology_file, output_name)
+    
     add_5_prime(five_prime, mutated_struct)
     
     add_3_prime(three_prime, mutated_struct)
     
-    export_structure(mutated_struct, output_name, stats)
+    export_structure(mutated_struct, strucutre, output_name, stats, ori_new_tocolor, five_prime, three_prime)
     
     return 0
 
@@ -200,7 +205,11 @@ def run_output_bonds(input_md_file, strucutre_file):
     invovation = p1 + p2
     start_dir = os.getcwd()
     os.chdir(input_md_file.parent)
-    result = subprocess.run(invovation, shell=True)
+    try:
+        result = subprocess.run(invovation, shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(e)
+        raise ValueError('The run output bonds script failed')
     os.chdir(start_dir)
     
     return None
@@ -209,7 +218,7 @@ def get_hblist(strucutre_file, topology_file, input_md_file, traj_file, n_bases)
     if traj_file is not None:
         strucutre_file = traj_file
 
-    # run_output_bonds(input_md_file, strucutre_file)
+    run_output_bonds(input_md_file, strucutre_file)
     with open('hblist.txt', 'r') as f:
         lines = f.readlines()
     lines_strip = [line.strip() for line in lines]
@@ -219,7 +228,9 @@ def get_hblist(strucutre_file, topology_file, input_md_file, traj_file, n_bases)
         try:
             lines_array.append(np.array(line, dtype=float))
         except:
-            print(line)
+            pass
+            # print(line)
+            # raise ValueError('The run output bonds script ')
     lines_one_array = np.array(lines_array)
     columns = ['id1', 'id2', 'HB']
     df = pd.DataFrame(lines_one_array, columns=columns, dtype=float)
@@ -245,6 +256,12 @@ def get_hblist(strucutre_file, topology_file, input_md_file, traj_file, n_bases)
         
     hb_id_1 = df_result['id1'].reset_index(drop=True).map(int)
     hb_id_2 = df_result['id2'].reset_index(drop=True).map(int)
+    
+    df_result.to_csv('hb_list_traj.csv')
+    
+    with open('hb_list_traj.txt', 'w') as f:
+        for id1, id2 in zip(hb_id_1, hb_id_2):
+            f.write(f'{id1} {id2}\n')
 
     return hb_id_1, hb_id_2
 
@@ -396,14 +413,76 @@ def validate_mutation(mutated_struct, index_to_seq_map_with_coding, coding_with_
     coding_self_binding = set(map(int, all_bad_idxes))
     coding_bound = all_coding.difference(coding_no_comp).difference(coding_self_binding)
     
-    all_structring = base_idx_set.difference(all_coding)
-    structring_no_comp = all_structring.difference(paired_idx_set)
-    structring_bound_to_coding = set([pair_map[int(bound_coding)] for bound_coding in list(coding_bound)])
-    structring_unbound = all_structring.difference(structring_bound_to_coding)
+    all_structuring = base_idx_set.difference(all_coding)
+    structuring_no_comp = all_structuring.difference(paired_idx_set)
+    structuring_bound_to_coding = set([pair_map[int(bound_coding)] for bound_coding in list(coding_bound)])
+    structuring_selfbound = all_structuring.difference(structuring_bound_to_coding).difference(structuring_no_comp)
     
     assert len(set(coding_indexes).intersection(unpaired_nucs).difference(set(coding_no_complement))) == 0
     
-    return coding_no_comp, coding_self_binding, coding_bound, structring_no_comp, structring_bound_to_coding, structring_unbound
+    return coding_no_comp, coding_self_binding, coding_bound, structuring_no_comp, structuring_bound_to_coding, structuring_selfbound
+
+
+def plot_statistics(mutated_strcutre, pair_map, stats, mutated_struct, topology_file, output_name):
+    coding_no_comp, coding_self_binding, coding_bound, structuring_no_comp, structuring_bound_to_coding, structuring_selfbound = stats
+    
+    total_nucs = len(mutated_struct.strands[0])
+    total_paired_nucs = len(pair_map)
+    total_pairs = len(pair_map) // 2
+    
+    coding_total_unpaired = len(coding_self_binding)
+    total_missing_pairs = coding_total_unpaired // 2
+    
+    total_no_comp = len(coding_no_comp) + len(structuring_no_comp)
+    
+    lost_pairs = total_no_comp - coding_total_unpaired
+    
+
+    hb_list = 'hb_list_traj.txt'
+    
+    
+    top_file_path = output_name.with_suffix('.top') 
+    dat_file_path = output_name.with_suffix('.dat')
+    mutated_strcutre.export_top_conf(top_file_path, dat_file_path)
+
+    original = setup_ssorigami_from_files(topology_file, hb_list)
+    new = setup_ssorigami_from_files(output_name.with_suffix('.top'), hb_list)
+    
+    ori_new_diffs, ori_new_tocolor = get_energy_ratio(original, new, color_threshold=-0.4)
+
+    label = f'Number of domains:{len(ori_new_diffs)}\nMean percent energy change: {np.mean(ori_new_diffs):.2f}'
+    sns.histplot(ori_new_diffs, label=label)
+    plt.xlabel('Percent energy change between original and new duplex domains')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_name.with_suffix('.png'))
+    
+    stat_print = f"""
+Single-stranded origami strucutring strand design algorithm result info:
+    Base struct nucs: {total_nucs}
+    Base struct HB paired nucs: {total_paired_nucs}
+    Base struct unpaired nucs: {total_nucs - total_paired_nucs}
+    Base struct % HB paired = {100*(total_paired_nucs / total_nucs):.2f}%
+    
+    Coding struct HB paired nucs: {total_paired_nucs - coding_total_unpaired} 
+    Coding struct HB lost paired nucs: {coding_total_unpaired}
+    Coding struct % HB paired: {100*((total_paired_nucs - coding_total_unpaired) / total_nucs):.2f}%
+    
+    Calculated domains: {len(ori_new_diffs)}
+    Destabilized domains: {len([ori for ori in ori_new_diffs if ori < -0.4])}
+    Mean percent domain energy change including unchanged domains: {np.mean(ori_new_diffs)*100:.2f} %
+    Mean percent domain energy change excluding unchanged domains: {np.mean([ori for ori in ori_new_diffs if ori != 0])*100:.2f} %
+    
+    Percent domain energy change histogram saved to: {output_name.with_suffix('.png')}
+    """
+    
+    print(stat_print)
+    print(f'    Info saved to: {output_name.with_suffix(".txt")}\n')
+    
+    with open(output_name.with_suffix('.txt'), 'w') as f:
+        f.write(stat_print)
+    
+    return ori_new_tocolor
 
 
 def add_5_prime(five_prime, mutated_strcutre):
@@ -412,10 +491,11 @@ def add_5_prime(five_prime, mutated_strcutre):
 
         bases_to_add = parse_coding_sequence(five_prime)
         bases_to_add = ''.join([base if base != 'U' else 'T' for base in bases_to_add][::-1])
-        fwd_strand, reverse_strand = dna.construct_strands(bases_to_add, current_five_prime_base.pos - 2, current_five_prime_base.a3)
+        fwd_strand, reverse_strand = dna.construct_strands(bases_to_add, current_five_prime_base.pos - 0.3897, current_five_prime_base.a3)
 
         mutated_strcutre.strands[0].append(fwd_strand)
     return None
+
 
 def add_3_prime(three_prime, mutated_strcutre):
     if three_prime is not None:
@@ -423,24 +503,89 @@ def add_3_prime(three_prime, mutated_strcutre):
 
         bases_to_add = parse_coding_sequence(three_prime)
         bases_to_add = ''.join([base if base != 'U' else 'T' for base in bases_to_add][::-1])
-        fwd_strand, reverse_strand = dna.construct_strands(bases_to_add, current_three_prime_base.pos - 4, current_three_prime_base.a3, rot=90)
+        coord = current_three_prime_base.a3
+        pos_normed = current_three_prime_base.pos / np.linalg.norm(current_three_prime_base.pos)
+        contribution =  current_three_prime_base.pos - coord * (0.3897 * len(bases_to_add))
+        
+        fwd_strand, reverse_strand = dna.construct_strands(bases_to_add, contribution, coord)
 
         mutated_strcutre.strands[0].prepend(fwd_strand)
     return None
 
 
-def export_structure(mutated_strcutre, output_name, stats):
+def export_structure(mutated_strcutre, strucutre, output_name, stats, ori_new_tocolor, five_prime, three_prime):
     top_file_path = output_name.with_suffix('.top') 
     dat_file_path = output_name.with_suffix('.dat')
     mutated_strcutre.export_top_conf(top_file_path, dat_file_path)
     
-    coding_no_comp, coding_self_binding, coding_bound, structring_no_comp, structring_bound_to_coding, structring_unbound = stats
-
     mutated_strcutre.export_oxview(output_name.with_suffix('.oxview'))
     with open(output_name.with_suffix('.oxview'), 'r') as f:
         oxview_file = json.load(f)
+    
+    coding_no_comp, coding_self_binding, coding_bound, structuring_no_comp, structuring_bound_to_coding, structuring_selfbound = stats
+    
+    monomers  = oxview_file['systems'][0]['strands'][0]['monomers']
+    selections = oxview_file['selections']
+    
+    # Define a list of color names
+    color_names = [
+        "lavender", "darkturquoise", "mediumpurple", "maroon", "orchid", "plum", "snow", "steelblue", "lightsteelblue"
+    ]
+    
+    # Convert color names to RGB integers
+    color_pallete = [color_name_to_rgb(color) for color in color_names]
+    
+    regions_to_color = [coding_self_binding, coding_bound, structuring_bound_to_coding, ori_new_tocolor, structuring_no_comp, coding_no_comp, structuring_selfbound]
+    regions_to_color = [np.array(list(indexes)) for indexes in regions_to_color]
+    
+    if three_prime is not None:
+        three_prime_bases_added = len(parse_coding_sequence(three_prime))
+        for indexes in regions_to_color:
+            indexes += three_prime_bases_added
+        regions_to_color.append(list(range(three_prime_bases_added)))
+    
+    if five_prime is not None:
+        bases_added = len(parse_coding_sequence(five_prime))
+        if three_prime is not None:
+            starting_index = three_prime_bases_added + len(strucutre.strands[0])
+        else:
+            starting_index = len(strucutre.strands[0])
+        five_idxes = list(range(starting_index, starting_index + bases_added))    
+        regions_to_color.append(five_idxes)
+            
+    for color_idx, indexes in enumerate(regions_to_color):
+        my_color = color_pallete[color_idx]
+        for idx in indexes:
+            monomers[idx]['color'] = my_color 
         
+    sys_names = ["coding_self_binding", "coding_bound_to_structuring", "structuring_bound_to_coding", "highly_destabilized", "structuring_no_comp", "coding_no_comp", "structuring_self_bound"]
+    if three_prime is not None:
+        sys_names.append('three_prime')
+    if five_prime is not None:
+        sys_names.append('five_prime')
+    
+    for sys_idx, indexes in enumerate(regions_to_color):
+        select = sys_names[sys_idx].replace('_', ' ')
+        select += f": {color_names[sys_idx]}"
+        my_select = [select, list(map(int, list(indexes)))]
+        selections.append(my_select)
+        
+    oxview_file['systems'][0]['strands'][0]['monomers'] = monomers
+    oxview_file['selections'] = selections
+    
+    with open(output_name.with_suffix('.oxview'), 'w') as f:
+        json.dump(oxview_file, f)
+    
     return None
+
+
+def rgb_to_int(r, g, b):
+    return (r << 16) + (g << 8) + b
+
+
+def color_name_to_rgb(color_name):
+    rgb = mcolors.to_rgb(color_name)
+    return rgb_to_int(*(int(x * 255) for x in rgb))
 
 
 def get_compseq(seq):
