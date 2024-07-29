@@ -7,6 +7,7 @@ from folder_base import get_energy_ratio, setup_ssorigami_from_files
 
 import os
 import multiprocessing as mp
+import sys
 import numpy as np
 import argparse
 import subprocess
@@ -17,6 +18,10 @@ import json
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from Bio.Seq import Seq
+from Bio.SeqFeature import SeqFeature, FeatureLocation
+from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
 
 
 def main():
@@ -211,6 +216,10 @@ def run_output_bonds(input_md_file, strucutre_file):
         print(e)
         raise ValueError('The run output bonds script failed')
     os.chdir(start_dir)
+    if result.returncode != 0:
+        print('The output_bonds script failed')
+        sys.exit(1)
+    
     
     return None
 
@@ -218,7 +227,7 @@ def get_hblist(strucutre_file, topology_file, input_md_file, traj_file, n_bases)
     if traj_file is not None:
         strucutre_file = traj_file
 
-    run_output_bonds(input_md_file, strucutre_file)
+    # run_output_bonds(input_md_file, strucutre_file)
     with open('hblist.txt', 'r') as f:
         lines = f.readlines()
     lines_strip = [line.strip() for line in lines]
@@ -529,7 +538,7 @@ def export_structure(mutated_strcutre, strucutre, output_name, stats, ori_new_to
     
     # Define a list of color names
     color_names = [
-        "lavender", "darkturquoise", "mediumpurple", "maroon", "orchid", "plum", "snow", "steelblue", "lightsteelblue"
+        "lightcoral", "darkturquoise", "mediumpurple", "maroon", "orchid", "plum", "snow", "steelblue", "lightsteelblue"
     ]
     
     # Convert color names to RGB integers
@@ -576,8 +585,86 @@ def export_structure(mutated_strcutre, strucutre, output_name, stats, ori_new_to
     with open(output_name.with_suffix('.oxview'), 'w') as f:
         json.dump(oxview_file, f)
     
+    
+    struct_bases = mutated_strcutre.strands[0].bases
+    struct_bases_str_5_3 = ''.join(struct_bases.tolist()[::-1])
+    
+    regions_to_color_mirrored = mirror_indexes(regions_to_color, len(struct_bases))
+    annotations = []                                    
+    for color_idx, indexes in enumerate(regions_to_color_mirrored):
+        my_name = sys_names[color_idx]
+        grouped = group_consecutive_indexes(indexes)
+        for sub_idxes in grouped:
+        
+            min_idx = int(min(sub_idxes))
+            max_idx = int(max(sub_idxes)) +1
+            annot = (min_idx, max_idx, my_name, 'DNA')
+            annotations.append(annot)
+            
+    coding = np.concatenate([regions_to_color_mirrored[0], regions_to_color_mirrored[1], regions_to_color_mirrored[5]])
+    structring = np.concatenate([regions_to_color_mirrored[2], regions_to_color_mirrored[4], regions_to_color_mirrored[6]])
+        
+    annotations.append((int(min(coding)), int(max(coding))+1, 'all_coding', 'DNA'))
+    annotations.append((int(min(structring)), int(max(structring))+1, 'all_structuring', 'DNA'))
+    
+    create_benchling_dna_file(struct_bases_str_5_3, annotations, output_name.with_suffix('.dna'), output_name)
+    
     return None
 
+
+def create_benchling_dna_file(sequence, annotations, file_name, output_name):
+    """
+    Create a Benchling-readable .dna file.
+    
+    :param sequence: str, the full DNA sequence.
+    :param annotations: list of tuples, each containing (start, end, label, type).
+    :param file_name: str, the name of the output .dna file.
+    """
+    # Create a SeqRecord object
+    seq_record = SeqRecord(Seq(sequence), id="ExampleID", name=f"{output_name.stem}", description=f"Annotated {output_name}")
+    seq_record.annotations["molecule_type"] = "DNA"
+    # Add annotations
+    for start, end, label, feature_type in annotations:
+        feature = SeqFeature(FeatureLocation(start, end), type=feature_type, qualifiers={"label": label})
+        seq_record.features.append(feature)
+    
+    # Write to file
+    SeqIO.write(seq_record, file_name, "genbank")
+
+
+def mirror_indexes(index_lists, max_index):
+    mirrored_lists = []
+    for lst in index_lists:
+        mirrored_list = [max_index - index for index in lst]
+        mirrored_lists.append(mirrored_list)
+    return mirrored_lists
+
+
+def group_consecutive_indexes(indexes):
+    if not indexes:
+        return []
+
+    # Sort the indexes if they are not sorted
+    indexes.sort()
+
+    # Initialize variables
+    grouped_indexes = []
+    current_group = [indexes[0]]
+
+    # Iterate through the list starting from the second element
+    for i in range(1, len(indexes)):
+        if indexes[i] == indexes[i-1] + 1:
+            # Current index is consecutive, add to the current group
+            current_group.append(indexes[i])
+        else:
+            # Current index is not consecutive, save the current group and start a new one
+            grouped_indexes.append(current_group)
+            current_group = [indexes[i]]
+
+    # Add the last group to the result
+    grouped_indexes.append(current_group)
+
+    return grouped_indexes
 
 def rgb_to_int(r, g, b):
     return (r << 16) + (g << 8) + b
