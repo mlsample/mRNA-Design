@@ -227,7 +227,7 @@ def get_hblist(strucutre_file, topology_file, input_md_file, traj_file, n_bases)
     if traj_file is not None:
         strucutre_file = traj_file
 
-    # run_output_bonds(input_md_file, strucutre_file)
+    run_output_bonds(input_md_file, strucutre_file)
     with open('hblist.txt', 'r') as f:
         lines = f.readlines()
     lines_strip = [line.strip() for line in lines]
