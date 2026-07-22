@@ -1,5 +1,4 @@
-import ipy_oxdna as iox
-import ipy_oxdna.dna_structure as dna
+import ipy_oxdna.strucutre_editor.dna_structure as dna
 from oxDNA_analysis_tools.output_bonds import output_bonds
 from oxDNA_analysis_tools.UTILS.RyeReader import get_confs, inbox, describe
 from oxDNA_analysis_tools.UTILS.oxview import oxdna_conf
@@ -73,16 +72,16 @@ def parse_arguments():
                         help='Path to oxDNA .top file of ssOrigami file EX: ./ssOrigami.dat')
     parser.add_argument('-i', '--input_md_file', metavar='input_md_file', type=str,
                         help='Path to oxDNA input file EX: ./input')
-    parser.add_argument('-c', '--coding_sequence', metavar='output_name', type=str,
-                        help='Path to .txt or .fasta file coding sequence with bases in 5` to 3` order EX: ./coding_seq.txt')
-    parser.add_argument('-o', '--output_name', metavar='output_name', type=str,
-                        help='name of the Default: ./fatcat_tmalign_homology_search.csv')
     parser.add_argument('--traj_file', metavar='traj_file', type=str,
                         help='Path to oxDNA .dat trajectory file of for determining hb pairs')
+    parser.add_argument('-c', '--coding_sequence', metavar='coding_sequence', type=str,
+                        help='Path to .txt or .fasta file coding sequence with bases in 5` to 3` order EX: ./coding_seq.txt')
     parser.add_argument('--five_prime', metavar='five_prime', type=str,
                         help='Path to a .txt or .fasta file with bases in 5` to 3` order to add to 5 prime end')
     parser.add_argument('--three_prime', metavar='three_prime', type=str,
                         help='Path to a .txt or .fasta file with bases with bases in 5` to 3` order to add to 3 prime end')
+    parser.add_argument('-o', '--output_name', metavar='output_name', type=str,
+                        help='name of the Default: ./fatcat_tmalign_homology_search.csv')
     parser.add_argument('--force_overwrite', action='store_true',
                         help='Force overwrite of existing results if they exist.')
 
@@ -203,7 +202,7 @@ def get_structure(strucutre_file, topology_file):
 
 
 def run_output_bonds(input_md_file, strucutre_file):
-    p1 = f'oat output_bonds "{input_md_file.as_posix()}" "{strucutre_file.as_posix()}" '
+    p1 = f'oat output_bonds "{input_md_file.as_posix()}" "{strucutre_file.as_posix()}" --force_print'
 
     p2 = """| grep -v "#" | gawk '{if($7 < -0.1){print $1 " " $2 " " $7 " "}}' > hblist.txt"""
 
@@ -625,7 +624,7 @@ def create_benchling_dna_file(sequence, annotations, file_name, output_name):
     seq_record.annotations["molecule_type"] = "DNA"
     # Add annotations
     for start, end, label, feature_type in annotations:
-        feature = SeqFeature(FeatureLocation(start, end), type=feature_type, qualifiers={"label": label})
+        feature = SeqFeature(FeatureLocation(start-1, end-1), type=feature_type, qualifiers={"label": label})
         seq_record.features.append(feature)
     
     # Write to file
