@@ -1,8 +1,24 @@
 /strucutres
 /pres_images
 /origami_deltag
-/auxillary_scripts
 .vscode
 *.egg-info
 *.pyc
 
+mutations
+assessments.ipynb
+run_output_bonds.ipynb
+example/egfp_structring_encoded.dat
+example/egfp_structring_encoded.dna
+example/egfp_structring_encoded.oxview
+example/egfp_structring_encoded.png
+example/egfp_structring_encoded.top
+example/egfp_structring_encoded.txt
+example/hb_list_traj.csv
+example/hb_list_traj.txt
+example/hblist.txt
+example/ssRNA_science2_last_conf.dat.pyidx
+example/trajectory.dat.pyidx
+auxillary_scripts/
+example/egfp_structring_encoded.dat.pyidx
+example/stapler/
