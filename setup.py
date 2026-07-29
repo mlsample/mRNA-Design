@@ -8,14 +8,18 @@ setup(
         design the sequence which will embbed the coding sequence in the strucutre.',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
-    url='https://github.com/mlsample/nanostructred_expressing_nucleic_acids',
+    url='https://github.com/mlsample/mRNA-Design',
     author='Matthew Sample',
     author_email='matsample1@gmail.com',
-    license='MIT',
+    license='GPL-3.0',
     install_requires=[
     'numpy',
+    'pandas',
+    'matplotlib',
+    'seaborn',
+    'biopython',
     'pytest'
-    # ... other dependencies ...
+    # ipy_oxdna, oxDNA_analysis_tools/oxpy and nupack are not on PyPI
+    # and must be installed separately
     ],
-    # dependencies can be listed under install_requires
 )
