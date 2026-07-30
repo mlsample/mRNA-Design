@@ -202,32 +202,44 @@ def get_structure(strucutre_file, topology_file):
 
 
 def run_output_bonds(input_md_file, strucutre_file):
+    input_md_file = input_md_file.resolve()
+    strucutre_file = strucutre_file.resolve()
+    run_dir = input_md_file.parent
+    hblist_file = run_dir / 'hblist.txt'
+
     p1 = f'oat output_bonds "{input_md_file.as_posix()}" "{strucutre_file.as_posix()}" --force_print'
 
-    p2 = """| grep -v "#" | gawk '{if($7 < -0.1){print $1 " " $2 " " $7 " "}}' > hblist.txt"""
+    p2 = f""" | grep -v "#" | gawk '{{if($7 < -0.1){{print $1 " " $2 " " $7 " "}}}}' > "{hblist_file.as_posix()}" """
 
-    invovation = p1 + p2
+    # pipefail so a failing oat is not masked by the exit code of the last stage of the pipe
+    invovation = 'set -o pipefail; ' + p1 + p2
+
     start_dir = os.getcwd()
-    os.chdir(input_md_file.parent)
+    os.chdir(run_dir)
     try:
-        result = subprocess.run(invovation, shell=True, check=True)
+        subprocess.run(invovation, shell=True, check=True, executable='/bin/bash')
     except subprocess.CalledProcessError as e:
         print(e)
         raise ValueError('The run output bonds script failed')
-    os.chdir(start_dir)
-    if result.returncode != 0:
-        print('The output_bonds script failed')
-        sys.exit(1)
-    
-    
-    return None
+    finally:
+        os.chdir(start_dir)
+
+    if not hblist_file.exists() or hblist_file.stat().st_size == 0:
+        raise ValueError(
+            f'output_bonds produced no base pairs ({hblist_file} is empty). '
+            'Check that the input file, topology and configuration belong together '
+            'and that the oxDNA backend in the input file is available.'
+        )
+
+    return hblist_file
+
 
 def get_hblist(strucutre_file, topology_file, input_md_file, traj_file, n_bases):
     if traj_file is not None:
         strucutre_file = traj_file
 
-    run_output_bonds(input_md_file, strucutre_file)
-    with open('hblist.txt', 'r') as f:
+    hblist_file = run_output_bonds(input_md_file, strucutre_file)
+    with open(hblist_file, 'r') as f:
         lines = f.readlines()
     lines_strip = [line.strip() for line in lines]
     lines_split = [line.split(' ') for line in lines_strip]
